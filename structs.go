@@ -189,6 +189,9 @@ type ConsumerCoordinator interface {
 	Returns a read-only channel of CoordinatorEvent that will get values on any significant coordinator event (e.g. new consumer appeared, new broker appeared etc.) and error if failed to subscribe. */
 	SubscribeForChanges(Group string) (<-chan CoordinatorEvent, error)
 
+	/* Requests that a blue/green deployment be done.*/
+	RequestBlueGreenDeployment(blue BlueGreenDeployment, green BlueGreenDeployment) error
+
 	/* Gets all deployed topics for consume group Group from consumer coordinator.
 	Returns a map where keys are notification ids and values are DeployedTopics. May also return an error (e.g. if failed to reach coordinator). */
 	GetBlueGreenRequest(Group string) (map[string]*BlueGreenDeployment, error)
@@ -227,13 +230,13 @@ const (
 
 // OffsetStorage is used to store and retrieve consumer offsets.
 type OffsetStorage interface {
-    // Gets the offset for a given group, topic and partition.
-    // May return an error if fails to retrieve the offset.
-    GetOffset(group string, topic string, partition int32) (int64, error)
+	// Gets the offset for a given group, topic and partition.
+	// May return an error if fails to retrieve the offset.
+	GetOffset(group string, topic string, partition int32) (int64, error)
 
-    // Commits the given offset for a given group, topic and partition.
-    // May return an error if fails to commit the offset.
-    CommitOffset(group string, topic string, partition int32, offset int64) error
+	// Commits the given offset for a given group, topic and partition.
+	// May return an error if fails to commit the offset.
+	CommitOffset(group string, topic string, partition int32, offset int64) error
 }
 
 // Represents a consumer state snapshot.

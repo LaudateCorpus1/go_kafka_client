@@ -164,19 +164,50 @@ func (this *ZookeeperCoordinator) GetConsumerInfo(Consumerid string, Groupid str
 }
 
 func (this *ZookeeperCoordinator) tryGetConsumerInfo(Consumerid string, Groupid string) (*ConsumerInfo, error) {
-	data, _, err := this.zkConn.Get(fmt.Sprintf("%s/%s",
-		newZKGroupDirs(this.config.Root, Groupid).ConsumerRegistryDir, Consumerid))
+	zkPath := fmt.Sprintf("%s/%s", newZKGroupDirs(this.config.Root, Groupid).ConsumerRegistryDir, Consumerid)
+	data, _, err := this.zkConn.Get(zkPath)
 	if err != nil {
 		return nil, err
 	}
 
-	consumerInfo := &ConsumerInfo{}
-	err = json.Unmarshal(data, consumerInfo)
+	type consumerInfoTmp struct {
+		Version      int16
+		Subscription map[string]int
+		Pattern      string
+		Timestamp    json.RawMessage
+	}
+	tmpInfo := &consumerInfoTmp{}
+	err = json.Unmarshal(data, tmpInfo)
+
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%v Path: %s, Data: %s", err, zkPath, string(data))
 	}
 
+	ts, convErr := fixTimestamp(tmpInfo.Timestamp)
+	if convErr != nil {
+		return nil, fmt.Errorf("%v Path: %s, Data: %s", err, zkPath, string(data))
+	}
+	consumerInfo := &ConsumerInfo{Version: tmpInfo.Version, Subscription: tmpInfo.Subscription, Pattern: tmpInfo.Pattern, Timestamp: ts}
 	return consumerInfo, nil
+}
+
+func fixTimestamp(b json.RawMessage) (int64, error) {
+	var s string
+	var i int64
+	var err error
+	err = json.Unmarshal(b, &s)
+	if err == nil {
+		var n int64
+		n, err = strconv.ParseInt(s, 10, 64)
+		if err == nil {
+			return n, nil
+		}
+	}
+	err = json.Unmarshal(b, &i)
+	if err == nil {
+		return i, nil
+	}
+	return 0, fmt.Errorf("Unable to convert raw value %+v to int64", b)
 }
 
 // Gets the information about consumers per topic in consumer group Groupid excluding internal topics (such as offsets) if ExcludeInternalTopics = true.
@@ -626,23 +657,23 @@ func (this *ZookeeperCoordinator) AwaitOnStateBarrier(consumerId string, group s
 
 func (this *ZookeeperCoordinator) joinStateBarrier(consumerId string, group string, stateHash string, api string, timeout time.Duration) (<-chan chan bool, error) {
 	path := fmt.Sprintf("%s/%s/%s", newZKGroupDirs(this.config.Root, group).ConsumerApiDir, api, stateHash)
-    deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(timeout)
 	var err error
 	for i := 0; i <= this.config.MaxRequestRetries; i++ {
 		Infof(this, "Joining state barrier %s", path)
 		_, err = this.zkConn.Create(path, []byte(strconv.FormatInt(deadline.Unix(), 10)), 0, zk.WorldACL(zk.PermAll))
 		if err != nil {
-            if err == zk.ErrNodeExists {
-                data, _, err := this.zkConn.Get(path)
-                if err != nil {
-                    continue
-                }
-                deadlineInt, _ := strconv.ParseInt(string(data), 10, 0)
-                deadline = time.Unix(deadlineInt, 0)
-                Infof(this, "Barrier already exists with deadline set to %v. Joining...", deadline)
-            } else {
-			    continue
-            }
+			if err == zk.ErrNodeExists {
+				data, _, err := this.zkConn.Get(path)
+				if err != nil {
+					continue
+				}
+				deadlineInt, _ := strconv.ParseInt(string(data), 10, 0)
+				deadline = time.Unix(deadlineInt, 0)
+				Infof(this, "Barrier already exists with deadline set to %v. Joining...", deadline)
+			} else {
+				continue
+			}
 		}
 
 		_, _, zkMemberJoinedWatcher, err := this.zkConn.ChildrenW(path)
@@ -1137,6 +1168,9 @@ func (mzk *mockZookeeperCoordinator) GetOffset(group string, topic string, parti
 	panic("Not implemented")
 }
 func (mzk *mockZookeeperCoordinator) SubscribeForChanges(group string) (<-chan CoordinatorEvent, error) {
+	panic("Not implemented")
+}
+func (mzk *mockZookeeperCoordinator) RequestBlueGreenDeployment(blue BlueGreenDeployment, green BlueGreenDeployment) error {
 	panic("Not implemented")
 }
 func (mzk *mockZookeeperCoordinator) GetBlueGreenRequest(Group string) (map[string]*BlueGreenDeployment, error) {

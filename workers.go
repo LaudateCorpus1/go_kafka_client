@@ -117,22 +117,22 @@ func (wm *WorkerManager) Start() {
 func (wm *WorkerManager) Stop() chan bool {
 	finished := make(chan bool)
 	go func() {
-		Debugf(wm, "Trying to stop workerManager")
+		Infof(wm, "Trying to stop workerManager")
 		inLock(&wm.stopLock, func() {
-			Debug(wm, "Stopping manager")
+			Info(wm, "Stopping manager")
 			wm.managerStop <- true
-			Debug(wm, "Stopping processor")
+			Info(wm, "Stopping processor")
 			wm.processingStop <- true
-			Debug(wm, "Successful manager stop")
-			Debug(wm, "Stopping committer")
+			Info(wm, "Successful manager stop")
+			Info(wm, "Stopping committer")
 			wm.commitStop <- true
-			Debug(wm, "Successful committer stop")
+			Info(wm, "Successful committer stop")
 			wm.failCounter.Close()
-			Debug(wm, "Stopped failure counter")
+			Info(wm, "Stopped failure counter")
 			finished <- true
-			Debug(wm, "Leaving manager stop")
+			Info(wm, "Leaving manager stop")
 		})
-		Debugf(wm, "Stopped workerManager")
+		Infof(wm, "Stopped workerManager")
 	}()
 
 	return finished
@@ -229,10 +229,14 @@ func (wm *WorkerManager) processBatch() {
 					wm.taskIsDone(result)
 				} else {
 					if _, ok := result.(*TimedOutResult); ok {
+						wm.metrics.taskTimeouts().Inc(1)
+						if task == nil || task.Callee == nil {
+							return
+						}
 						task.Callee.OutputChannel = make(chan WorkerResult)
 					}
 
-					Warnf(wm, "Worker task %s has failed", result.Id())
+					Debugf(wm, "Worker task %s has failed", result.Id())
 					task.Retries++
 					if task.Retries > wm.config.MaxWorkerRetries {
 						Errorf(wm, "Worker task %s has failed after %d retries", result.Id(), wm.config.MaxWorkerRetries)
@@ -264,7 +268,7 @@ func (wm *WorkerManager) processBatch() {
 							}
 						}
 					} else {
-						Warnf(wm, "Retrying worker task %s %dth time", result.Id(), task.Retries)
+						Debugf(wm, "Retrying worker task %s %dth time", result.Id(), task.Retries)
 						time.Sleep(wm.config.WorkerBackoff)
 						go task.Callee.Start(task, wm.config.Strategy)
 					}
