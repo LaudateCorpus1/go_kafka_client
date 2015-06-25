@@ -247,7 +247,7 @@ func (f *consumerFetcherRoutine) start() {
 						})
 
 						if err != nil {
-							if offset > -1 { //Negative offsets are obviously out of range but don't spam the logs...
+							if offset > -1 { // Negative offsets are obviously out of range but don't spam the logs...
 								if f.manager.client.IsOffsetOutOfRange(err) {
 									Warnf(f, "Current offset %d for topic %s and partition %s is out of range.", offset, nextTopicPartition.Topic, nextTopicPartition.Partition)
 									f.handleOffsetOutOfRange(&nextTopicPartition)
