@@ -20,7 +20,6 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/elodina/siesta"
 	"github.com/elodina/siesta-producer"
-	"github.com/samuel/go-zookeeper/zk"
 	"os"
 	"os/exec"
 	"reflect"
@@ -37,17 +36,6 @@ type logWriter struct {
 func (lw logWriter) Write(b []byte) (int, error) {
 	lw.t.Logf("%s%s", lw.p, string(b))
 	return len(b), nil
-}
-
-func withZookeeper(t *testing.T, zookeeperWork func(zkServer *zk.TestServer)) {
-	testCluster, err := zk.StartTestCluster(1, nil, logWriter{t: t, p: "[ZKERR] "})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer testCluster.Stop()
-
-	zookeeperWork(&testCluster.Servers[0])
 }
 
 func assert(t *testing.T, actual interface{}, expected interface{}) {

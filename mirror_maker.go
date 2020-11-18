@@ -80,7 +80,7 @@ func NewMirrorMakerConfig() *MirrorMakerConfig {
 // MirrorMaker is a tool to mirror source Kafka cluster into a target (mirror) Kafka cluster.
 // It uses a Kafka consumer to consume messages from the source cluster, and re-publishes those messages to the target cluster.
 type MirrorMaker struct {
-	config          *MirrorMakerConfig
+	config *MirrorMakerConfig
 	//metricReporter  *KafkaMetricReporter
 	consumers       []*Consumer
 	producers       []producer.Producer
