@@ -19,13 +19,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-zookeeper/zk"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/samuel/go-zookeeper/zk"
 )
 
 var (
@@ -82,7 +82,7 @@ func (this *ZookeeperCoordinator) Connect() (err error) {
 
 func (this *ZookeeperCoordinator) tryConnect() (zkConn *zk.Conn, connectionEvents <-chan zk.Event, err error) {
 	Infof(this, "Connecting to ZK at %s\n", this.config.ZookeeperConnect)
-	zkConn, connectionEvents, err = zk.Connect(this.config.ZookeeperConnect, this.config.ZookeeperSessionTimeout)
+	zkConn, connectionEvents, err = zk.Connect(this.config.ZookeeperConnect, this.config.ZookeeperTimeout)
 	return
 }
 
@@ -93,30 +93,32 @@ func (this *ZookeeperCoordinator) Disconnect() {
 }
 
 func (this *ZookeeperCoordinator) listenConnectionEvents(connectionEvents <-chan zk.Event) {
-	for event := range connectionEvents { // will be closed by zk.Conn when it's stopped
-		Infof(this, "Received zkConnectionEvent Type: %s Server: %s State: %s", event.Type.String(), event.Server, event.State.String())
-		switch event.State {
-		case zk.StateConnecting:
-			// (Re)connecting to a ZK server
-			// Nothing to do
-		case zk.StateConnected:
-			// (Re)connected to a ZK server (TCP layer)
-			// We have no idea about ZK session at this moment
-			// Nothing to do
-		case zk.StateExpired:
-			// Failed to reuse the previous session (timeout)
-			// Existing watchers will be discarded
-			// Exsiting ephemeral nodes will be removed
-			for _, watch := range this.watches {
+	for event := range connectionEvents {
+		if this.closed {
+			return
+		}
+
+		if event.State == zk.StateExpired && event.Type == zk.EventSession {
+			err := this.Connect()
+			if err != nil {
+				this.config.PanicHandler(err)
+			}
+			for groupId, watch := range this.watches {
+				watch.zkEvents <- zk.Event{
+					Type:  zk.EventNodeCreated,
+					State: zk.StateConnected,
+					Path:  watch.poisonPillMessage,
+				}
+				_, err := this.SubscribeForChanges(groupId)
+				if err != nil {
+					this.config.PanicHandler(err)
+				}
 				watch.coordinatorEvents <- Reinitialize
 			}
 
-		case zk.StateHasSession:
-			// Got an new or existing session
-			// Nothing to do
+			return
 		}
 	}
-	Infof(this, "Stopping listening connection events")
 }
 
 /* Registers a new consumer with Consumerid id and TopicCount subscription that is a part of consumer group Groupid in this ConsumerCoordinator. Returns an error if registration failed, nil otherwise. */
@@ -136,6 +138,9 @@ func (this *ZookeeperCoordinator) RegisterConsumer(Consumerid string, Groupid st
 }
 
 func (this *ZookeeperCoordinator) tryRegisterConsumer(Consumerid string, Groupid string, TopicCount TopicsToNumStreams) (err error) {
+	if TopicCount == nil {
+		return fmt.Errorf("TopicCount must not be nil")
+	}
 	Debugf(this, "Trying to register consumer %s at group %s in Zookeeper", Consumerid, Groupid)
 	registryDir := newZKGroupDirs(this.config.Root, Groupid).ConsumerRegistryDir
 	pathToConsumer := fmt.Sprintf("%s/%s", registryDir, Consumerid)
@@ -531,6 +536,9 @@ func (this *ZookeeperCoordinator) trySubscribeForChanges(Groupid string) (<-chan
 						if strings.HasPrefix(e.Path, fmt.Sprintf("%s/%s",
 							newZKGroupDirs(this.config.Root, Groupid).ConsumerApiDir, BlueGreenDeploymentAPI)) {
 							groupWatch.coordinatorEvents <- BlueGreenRequest
+						} else if e.Path == groupWatch.poisonPillMessage {
+							stopRedirecting <- true
+							return
 						} else {
 							groupWatch.coordinatorEvents <- Regular
 						}
@@ -773,8 +781,7 @@ func (this *ZookeeperCoordinator) tryRemoveOldApiRequests(group string, api Cons
 	return err
 }
 
-func (this *ZookeeperCoordinator) AwaitOnStateBarrier(consumerId string, group string, barrierName string,
-	barrierSize int, api string, timeout time.Duration) bool {
+func (this *ZookeeperCoordinator) AwaitOnStateBarrier(consumerId string, group string, barrierName string, barrierSize int, api string, timeout time.Duration) bool {
 	barrierPath := fmt.Sprintf("%s/%s/%s", newZKGroupDirs(this.config.Root, group).ConsumerApiDir, api, barrierName)
 
 	var barrierExpiration time.Time
@@ -1160,8 +1167,8 @@ type ZookeeperConfig struct {
 	/* Zookeeper hosts */
 	ZookeeperConnect []string
 
-	/* Zookeeper session timeout */
-	ZookeeperSessionTimeout time.Duration
+	/* Zookeeper read timeout */
+	ZookeeperTimeout time.Duration
 
 	/* Max retries for any request except CommitOffset. CommitOffset is controlled by ConsumerConfig.OffsetsCommitMaxRetries. */
 	MaxRequestRetries int
@@ -1180,7 +1187,7 @@ type ZookeeperConfig struct {
 func NewZookeeperConfig() *ZookeeperConfig {
 	config := &ZookeeperConfig{}
 	config.ZookeeperConnect = []string{"localhost"}
-	config.ZookeeperSessionTimeout = 5 * time.Second
+	config.ZookeeperTimeout = 1 * time.Second
 	config.MaxRequestRetries = 3
 	config.RequestBackoff = 150 * time.Millisecond
 	config.Root = ""
@@ -1210,7 +1217,7 @@ func ZookeeperConfigFromFile(filename string) (*ZookeeperConfig, error) {
 	setStringSliceConfig(&config.ZookeeperConnect, z["zookeeper.connect"], ",")
 	setStringConfig(&config.Root, z["zookeeper.kafka.root"])
 
-	if err := setDurationConfig(&config.ZookeeperSessionTimeout, z["zookeeper.connection.session.timeout"]); err != nil {
+	if err := setDurationConfig(&config.ZookeeperTimeout, z["zookeeper.connection.timeout"]); err != nil {
 		return nil, err
 	}
 	if err := setIntConfig(&config.MaxRequestRetries, z["zookeeper.max.request.retries"]); err != nil {
